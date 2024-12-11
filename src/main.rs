@@ -1,4 +1,5 @@
-use clap::{App, Arg};
+use std::collections::HashMap;
+use clap::{Command, Arg};
 use futures::FutureExt;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -16,40 +17,60 @@ use hpts::*;
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut logger_builder = Builder::new();
 
-    let matches = App::new("hpts")
-        .version("0.0")
+    let matches = Command::new("hpts")
+        .version("1.0")
         .author("Yongsheng Xu")
-        .about("Turn your socks proxy into http proxy")
+        .about("Turn your socks proxies into http proxy")
         .arg(
-            Arg::with_name("socks")
-                .short("s")
-                .help("specify your socks proxy host, default: 127.0.0.1:1080")
-                .takes_value(true),
+            Arg::new("port")
+                .short('p')
+                .long("port")
+                .help("Port number to use")
+                .required(true),
         )
         .arg(
-            Arg::with_name("port")
-                .short("p")
-                .help("specify the listening port of http proxy server, default: 8080")
-                .takes_value(true),
+            Arg::new("verbosity")
+                .short('v')
+                .help("Sets the level of verbosity")
+                .action(clap::ArgAction::Count),
         )
         .arg(
-            Arg::with_name("v")
-                .short("v")
-                .multiple(true)
-                .help("Sets the level of verbosity"),
+            Arg::new("socks")
+                .short('s')
+                .long("socks")
+                .help("Map of environment name to address (e.g., env1=127.0.0.1:8080)")
+                .required(true)
+                .action(clap::ArgAction::Append),
         )
         .get_matches();
-    let socks: SocketAddr = matches
-        .value_of("socks")
-        .unwrap_or("127.0.0.1:1080")
+
+    let port: u16 = matches
+        .get_one::<String>("port")
+        .expect("Port is required")
         .parse()
-        .unwrap();
+        .expect("Port must be a valid integer");
 
-    let config = Arc::new(HptsConfig { socks5_addr: socks });
+    // Parse the verbosity argument
+    let verbosity = matches.get_count("verbosity");
 
-    let port: u16 = matches.value_of("port").unwrap_or("8080").parse().unwrap();
+    // Parse the socks argument into a HashMap
+    let socks: HashMap<String, SocketAddr> = matches
+        .get_many::<String>("socks")
+        .unwrap_or_default()
+        .map(|pair| {
+            let parts: Vec<&str> = pair.split('=').collect();
+            if parts.len() != 2 {
+                panic!("Invalid format for socks: {}. Expected format is key=value.", pair);
+            }
+            let addr: SocketAddr = parts[1].parse().expect("Invalid socket address format");
+            (parts[0].to_string(), addr)
+        })
+        .collect();
+
+    let config = Arc::new(HptsConfig { socks5_addrs: socks });
+
     let http_proxy_sock = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port);
-    let level = match matches.occurrences_of("v") {
+    let level = match verbosity {
         0 => LevelFilter::Error,
         1 => LevelFilter::Info,
         2 => LevelFilter::Debug,

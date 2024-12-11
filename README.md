@@ -20,8 +20,8 @@ FLAGS:
     -V, --version    Prints version information
 
 OPTIONS:
-    -p <port>         specify the listening port of http proxy server, default: 8080
-    -s <socks>        specify your socks proxy host, default: 127.0.0.1:1080
+    --port <port>         specify the listening port of http proxy server
+    --socks <socks>       specify your socks proxies host map, example: bla=127.0.0.1:1080
 ```
 
 ## Why rebuild wheels?

@@ -1,15 +1,17 @@
+use std::collections::HashMap;
 use futures::future::try_join;
 use httparse;
 use log::{debug, error, trace};
 use std::error::Error;
 use std::net::{IpAddr, SocketAddr};
+use std::ops::Index;
 use std::sync::Arc;
 use tokio::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 pub(crate) struct HptsConfig {
-    pub socks5_addr: SocketAddr,
+    pub socks5_addrs: HashMap<String, SocketAddr>
 }
 
 pub(crate) struct HptsContext {
@@ -51,6 +53,14 @@ pub(crate) async fn hpts_bridge(ctx: HptsContext) -> Result<(), Box<dyn Error>> 
             "incomplete http request",
         )));
     }
+    let hostname = req.path.unwrap();
+    let mut socks5_addr = ctx.config.socks5_addrs.values().next().unwrap();
+    for (sock_name, socks5_addr_) in ctx.config.socks5_addrs.iter() {
+        if hostname.contains(sock_name) {
+            socks5_addr = socks5_addr_;
+            break
+        }
+    }
 
     let mut port = 80;
     if req.method.unwrap().to_lowercase() == "connect" {
@@ -63,7 +73,8 @@ pub(crate) async fn hpts_bridge(ctx: HptsContext) -> Result<(), Box<dyn Error>> 
     }
 
     let mut socks5_buf = [0; 1024];
-    let mut socks5_stream = TcpStream::connect(&ctx.config.socks5_addr).await?;
+
+    let mut socks5_stream = TcpStream::connect(socks5_addr).await?;
     socks5_stream.write_all(&[05, 02, 00, 01]).await?;
     // skip check for now
     socks5_stream.read(&mut socks5_buf).await?;
