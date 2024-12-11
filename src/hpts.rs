@@ -54,10 +54,10 @@ pub(crate) async fn hpts_bridge(ctx: HptsContext) -> Result<(), Box<dyn Error>> 
         )));
     }
     let hostname = req.path.unwrap();
-    let mut socks5_addr = ctx.config.socks5_addrs.values().next().unwrap();
+    let mut socks5_addr: Option<&SocketAddr> = None;
     for (sock_name, socks5_addr_) in ctx.config.socks5_addrs.iter() {
         if hostname.contains(sock_name) {
-            socks5_addr = socks5_addr_;
+            socks5_addr = Some(socks5_addr_);
             break
         }
     }
@@ -72,12 +72,6 @@ pub(crate) async fn hpts_bridge(ctx: HptsContext) -> Result<(), Box<dyn Error>> 
         trace!("https");
     }
 
-    let mut socks5_buf = [0; 1024];
-
-    let mut socks5_stream = TcpStream::connect(socks5_addr).await?;
-    socks5_stream.write_all(&[05, 02, 00, 01]).await?;
-    // skip check for now
-    socks5_stream.read(&mut socks5_buf).await?;
     let mut host = "";
     for i in 0..16 {
         let h = headers[i];
@@ -94,35 +88,70 @@ pub(crate) async fn hpts_bridge(ctx: HptsContext) -> Result<(), Box<dyn Error>> 
 
     debug!("proxy to: {}:{}", host, port);
 
-    let n = build_socks5_cmd(&mut socks5_buf, &host, port);
-    trace!("cmd: {:?}", &socks5_buf[0..n]);
+    match socks5_addr {
+        Some(socks5_addr) => {
+            let mut socks5_buf = [0; 1024];
 
-    socks5_stream.write_all(&&socks5_buf[0..n]).await?;
-    // check OK
-    socks5_stream.read(&mut socks5_buf).await?;
-    // write the first packet
-    if ctx.resend {
-        socks5_stream.write_all(&ctx.buf).await?;
-    } else {
-        // write 200 back to client
-        ctx.socket.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await?;
+            let mut socks5_stream = TcpStream::connect(socks5_addr).await?;
+            socks5_stream.write_all(&[05, 02, 00, 01]).await?;
+            // skip check for now
+            socks5_stream.read(&mut socks5_buf).await?;
+
+
+            let n = build_socks5_cmd(&mut socks5_buf, &host, port);
+            trace!("cmd: {:?}", &socks5_buf[0..n]);
+
+            socks5_stream.write_all(&&socks5_buf[0..n]).await?;
+            // check OK
+            socks5_stream.read(&mut socks5_buf).await?;
+            // write the first packet
+            if ctx.resend {
+                socks5_stream.write_all(&ctx.buf).await?;
+            } else {
+                // write 200 back to client
+                ctx.socket.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await?;
+            }
+
+            // start buffering
+            let (mut ri, mut wi) = ctx.socket.split();
+            let (mut ro, mut wo) = socks5_stream.split();
+
+            let client_to_server = async {
+                io::copy(&mut ri, &mut wo).await?;
+                wo.shutdown().await
+            };
+
+            let server_to_client = async {
+                io::copy(&mut ro, &mut wi).await?;
+                wi.shutdown().await
+            };
+
+            try_join(client_to_server, server_to_client).await?;
+        }
+        None => {
+            let mut direct_stream = TcpStream::connect((host, port)).await?;
+            if ctx.resend {
+                direct_stream.write_all(&ctx.buf).await?;
+            } else {
+                ctx.socket.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await?;
+            }
+
+            let (mut ri, mut wi) = ctx.socket.split();
+            let (mut ro, mut wo) = direct_stream.split();
+
+            let client_to_server = async {
+                io::copy(&mut ri, &mut wo).await?;
+                wo.shutdown().await
+            };
+
+            let server_to_client = async {
+                io::copy(&mut ro, &mut wi).await?;
+                wi.shutdown().await
+            };
+
+            try_join(client_to_server, server_to_client).await?;
+        }
     }
-
-    // start buffering
-    let (mut ri, mut wi) = ctx.socket.split();
-    let (mut ro, mut wo) = socks5_stream.split();
-
-    let client_to_server = async {
-        io::copy(&mut ri, &mut wo).await?;
-        wo.shutdown().await
-    };
-
-    let server_to_client = async {
-        io::copy(&mut ro, &mut wi).await?;
-        wi.shutdown().await
-    };
-
-    try_join(client_to_server, server_to_client).await?;
     Ok(())
 }
 
