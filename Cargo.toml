@@ -10,7 +10,16 @@ repository = "https://github.com/chux0519/hpts"
 [dependencies]
 clap = "4.5.23"
 tokio = { version = "1.42.0", features = ["full"] }
-httparse = "1.3.4"
-futures = "0.3.0"
 log = "0.4"
 env_logger= "0.11.5"
+httparse = "1.9.5"
+
+
+[package.metadata]
+reproducible-build = true
+
+
+[profile.release]
+strip = true
+opt-level = 3
+debug = "none"
