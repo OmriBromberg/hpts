@@ -1,7 +1,6 @@
-use std::collections::HashMap;
-use futures::future::try_join;
 use httparse;
 use log::{debug, error, trace};
+use std::collections::HashMap;
 use std::error::Error;
 use std::net::{IpAddr, SocketAddr};
 use std::ops::Index;
@@ -11,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 pub(crate) struct HptsConfig {
-    pub socks5_addrs: HashMap<String, SocketAddr>
+    pub socks5_addrs: HashMap<String, SocketAddr>,
 }
 
 pub(crate) struct HptsContext {
@@ -58,7 +57,7 @@ pub(crate) async fn hpts_bridge(ctx: HptsContext) -> Result<(), Box<dyn Error>> 
     for (sock_name, socks5_addr_) in ctx.config.socks5_addrs.iter() {
         if hostname.contains(sock_name) {
             socks5_addr = Some(socks5_addr_);
-            break
+            break;
         }
     }
 
@@ -97,7 +96,6 @@ pub(crate) async fn hpts_bridge(ctx: HptsContext) -> Result<(), Box<dyn Error>> 
             // skip check for now
             socks5_stream.read(&mut socks5_buf).await?;
 
-
             let n = build_socks5_cmd(&mut socks5_buf, &host, port);
             trace!("cmd: {:?}", &socks5_buf[0..n]);
 
@@ -106,50 +104,23 @@ pub(crate) async fn hpts_bridge(ctx: HptsContext) -> Result<(), Box<dyn Error>> 
             socks5_stream.read(&mut socks5_buf).await?;
             // write the first packet
             if ctx.resend {
-                socks5_stream.write_all(&ctx.buf).await?;
+                socks5_stream.write_all(&ctx.buf[..ctx.pos]).await?;
             } else {
                 // write 200 back to client
                 ctx.socket.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await?;
             }
 
-            // start buffering
-            let (mut ri, mut wi) = ctx.socket.split();
-            let (mut ro, mut wo) = socks5_stream.split();
-
-            let client_to_server = async {
-                io::copy(&mut ri, &mut wo).await?;
-                wo.shutdown().await
-            };
-
-            let server_to_client = async {
-                io::copy(&mut ro, &mut wi).await?;
-                wi.shutdown().await
-            };
-
-            try_join(client_to_server, server_to_client).await?;
+            io::copy_bidirectional(&mut ctx.socket, &mut socks5_stream).await?;
         }
         None => {
             let mut direct_stream = TcpStream::connect((host, port)).await?;
             if ctx.resend {
-                direct_stream.write_all(&ctx.buf).await?;
+                direct_stream.write_all(&ctx.buf[..ctx.pos]).await?;
             } else {
                 ctx.socket.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await?;
             }
 
-            let (mut ri, mut wi) = ctx.socket.split();
-            let (mut ro, mut wo) = direct_stream.split();
-
-            let client_to_server = async {
-                io::copy(&mut ri, &mut wo).await?;
-                wo.shutdown().await
-            };
-
-            let server_to_client = async {
-                io::copy(&mut ro, &mut wi).await?;
-                wi.shutdown().await
-            };
-
-            try_join(client_to_server, server_to_client).await?;
+            io::copy_bidirectional(&mut ctx.socket, &mut direct_stream).await?;
         }
     }
     Ok(())

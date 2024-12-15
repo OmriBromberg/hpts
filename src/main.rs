@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use clap::{Command, Arg};
-use futures::FutureExt;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -8,7 +7,7 @@ use tokio::net::TcpListener;
 
 use env_logger::Builder;
 use log::LevelFilter;
-use log::{debug, error, info};
+use log::{debug, info};
 
 mod hpts;
 use hpts::*;
@@ -87,11 +86,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let (socket, _addr) = listener.accept().await?;
         debug!("accept from client: {}", _addr);
         let ctx = HptsContext::new(config.clone(), socket);
-        let task = hpts_bridge(ctx).map(|r| {
-            if let Err(e) = r {
-                error!("{}", e);
+        tokio::spawn(async move {
+            if let Err(e) = hpts_bridge(ctx).await {
+                eprintln!("Error handling connection: {}", e);
             }
         });
-        tokio::spawn(task);
     }
 }
